@@ -25,6 +25,161 @@
 
 ## Question 1. How do you implement **global interceptors conditionally**?
 
+## Short answer
+
+You implement conditional global interceptors in NestJS by using `APP_INTERCEPTOR` with a provider factory that decides whether to apply logic based on request context, configuration, or environment—often combined with a “no-op” interceptor or internal conditional branching inside the interceptor itself.
+
+---
+
+## Explanation
+
+In NestJS, interceptors are part of the request lifecycle pipeline and are typically applied globally using the `APP_INTERCEPTOR` token.
+
+However, **global interceptors are always registered at app bootstrap time**, so “conditional global application” is not about dynamically attaching/removing them per request at registration time. Instead, you have three production-grade strategies:
+
+---
+
+### 1. Conditional logic inside a global interceptor (most common, recommended)
+
+You always register the interceptor globally, but decide per request whether to execute logic.
+
+Typical conditions:
+
+- route metadata (`Reflector`)
+- headers (feature flags, internal requests)
+- environment-based toggles
+- user roles / auth context
+
+**Trade-off:** simple, but interceptor still runs for every request (light overhead).
+
+---
+
+### 2. Dynamic provider factory (conditional registration at bootstrap)
+
+Use `APP_INTERCEPTOR` with `useFactory` to decide whether to register it at all.
+
+Useful when:
+
+- disabling logging in test environments
+- enabling tracing only in production
+
+**Trade-off:** cannot change at runtime without restart.
+
+---
+
+### 3. Scope-based interception using `ContextIdFactory` / request-scoped providers (advanced)
+
+You can combine request-scoped providers or context-based logic for fine-grained control, but this is usually heavier and impacts performance.
+
+---
+
+### Architectural perspective
+
+In large-scale NestJS systems:
+
+- **Interceptors are cross-cutting concerns** (logging, caching, serialization, tracing)
+- Conditional logic should be:
+  - centralized (via metadata or config service)
+  - predictable (avoid hidden side effects)
+
+- Prefer **decorator-driven enable/disable** over scattered `if` conditions
+
+---
+
+### Scalability considerations
+
+- Global interceptors execute for every request → even empty logic adds latency at high RPS
+- Prefer early exits (`if (!shouldApply) return next.handle()`)
+- Avoid heavy DI or async calls inside interceptor condition checks
+- Use caching for config flags (e.g., feature flags)
+
+---
+
+### Security implications
+
+- Be careful not to rely solely on headers for disabling security-related interceptors
+- Ensure bypass conditions cannot be spoofed (e.g., internal headers should be validated by gateway/API proxy)
+
+---
+
+## Example
+
+### Conditional global interceptor using `APP_INTERCEPTOR` + metadata + config
+
+```ts
+// logging.interceptor.ts
+import {
+  CallHandler,
+  ExecutionContext,
+  Injectable,
+  NestInterceptor,
+} from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { Observable, tap } from "rxjs";
+
+export const SKIP_LOGGING = "skip_logging";
+
+@Injectable()
+export class LoggingInterceptor implements NestInterceptor {
+  constructor(private readonly reflector: Reflector) {}
+
+  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+    const skip = this.reflector.getAllAndOverride<boolean>(SKIP_LOGGING, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+
+    if (skip) {
+      return next.handle();
+    }
+
+    const start = Date.now();
+
+    return next.handle().pipe(
+      tap(() => {
+        const duration = Date.now() - start;
+        const req = context.switchToHttp().getRequest();
+        console.log(`[${req.method}] ${req.url} - ${duration}ms`);
+      }),
+    );
+  }
+}
+```
+
+```ts
+// logging.decorator.ts
+import { SetMetadata } from "@nestjs/common";
+import { SKIP_LOGGING } from "./logging.interceptor";
+
+export const SkipLogging = () => SetMetadata(SKIP_LOGGING, true);
+```
+
+```ts
+// app.module.ts
+import { Module } from "@nestjs/common";
+import { APP_INTERCEPTOR } from "@nestjs/core";
+import { LoggingInterceptor } from "./logging.interceptor";
+
+@Module({
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: LoggingInterceptor,
+    },
+  ],
+})
+export class AppModule {}
+```
+
+---
+
+## Pitfalls
+
+- ❌ Overusing global interceptors for everything → hard to debug request lifecycle
+- ❌ Heavy synchronous logic in interceptors → increases latency across all endpoints
+- ❌ Relying on headers for conditional bypass → security risk if not validated upstream
+- ❌ Using request-scoped interceptors excessively → performance degradation under load
+
 ## Question 2. How do you implement **logging with interceptors per module**?
 
 ## Question 3. How do you measure **request execution time using interceptors**?
