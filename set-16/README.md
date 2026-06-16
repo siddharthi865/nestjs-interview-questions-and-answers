@@ -25,6 +25,129 @@
 
 ## Question 1. How do you write **unit tests for controllers** in NestJS?
 
+## Short answer
+
+In NestJS, you unit test controllers by isolating them from the rest of the app using `@nestjs/testing`, mocking their dependent services, and invoking controller methods directly (or via `supertest` only for e2e tests). The goal is to test controller logic, not framework wiring or database behavior.
+
+---
+
+## Explanation
+
+In a well-designed NestJS architecture, controllers should be **thin layers** that:
+
+- Accept HTTP input
+- Delegate business logic to services
+- Return DTOs/responses
+
+So unit testing controllers focuses on:
+
+- Request → controller mapping correctness
+- Validation/pipes behavior (if applied manually)
+- Interaction with injected services (via mocks)
+- Error propagation handling
+
+### Key principles
+
+#### 1. Isolation via Dependency Injection
+
+NestJS controllers depend on providers (services). In unit tests, you replace these with **mock providers** using `useValue` or `useFactory`.
+
+#### 2. Testing module boundary
+
+You use `Test.createTestingModule()` to instantiate a minimal DI container, not the full app.
+
+#### 3. Avoid HTTP server startup
+
+Unit tests should NOT use `INestApplication.listen()` or `supertest`. That’s e2e testing.
+
+#### 4. Focus on behavior, not framework
+
+You test:
+
+- method output
+- service calls
+- exception behavior
+
+---
+
+## Example
+
+```ts
+// user.controller.ts
+import { Controller, Get, Param } from "@nestjs/common";
+import { UserService } from "./user.service";
+
+@Controller("users")
+export class UserController {
+  constructor(private readonly userService: UserService) {}
+
+  @Get(":id")
+  async getUser(@Param("id") id: string) {
+    return this.userService.findById(id);
+  }
+}
+```
+
+### Unit test (Jest)
+
+```ts
+import { Test, TestingModule } from "@nestjs/testing";
+import { UserController } from "./user.controller";
+import { UserService } from "./user.service";
+
+describe("UserController", () => {
+  let controller: UserController;
+  let service: jest.Mocked<UserService>;
+
+  const mockUserService = {
+    findById: jest.fn(),
+  };
+
+  beforeEach(async () => {
+    const module: TestingModule = await Test.createTestingModule({
+      controllers: [UserController],
+      providers: [
+        {
+          provide: UserService,
+          useValue: mockUserService,
+        },
+      ],
+    }).compile();
+
+    controller = module.get<UserController>(UserController);
+    service = module.get(UserService);
+  });
+
+  afterEach(() => {
+    jest.clearAllMocks();
+  });
+
+  it("should return a user by id", async () => {
+    const result = { id: "1", name: "John" };
+    service.findById.mockResolvedValue(result);
+
+    expect(await controller.getUser("1")).toEqual(result);
+    expect(service.findById).toHaveBeenCalledWith("1");
+  });
+
+  it("should propagate service errors", async () => {
+    service.findById.mockRejectedValue(new Error("Not found"));
+
+    await expect(controller.getUser("1")).rejects.toThrow("Not found");
+  });
+});
+```
+
+---
+
+## Pitfalls
+
+- ❌ Over-testing controllers (business logic should live in services)
+- ❌ Using real databases in unit tests (turns them into integration tests)
+- ❌ Not resetting mocks between tests → flaky test behavior
+- ❌ Testing NestJS framework behavior instead of your code logic
+- ❌ Forgetting to mock all provider dependencies → DI resolution errors
+
 ## Question 2. How do you write **unit tests for services**?
 
 ## Question 3. How do you **mock repositories** in unit tests?
