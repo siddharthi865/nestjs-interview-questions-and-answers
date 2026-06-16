@@ -25,6 +25,210 @@
 
 ## Question 1. How do you implement **conditional relations in queries**?
 
+## Short answer
+
+Conditional relations in NestJS (typically via TypeORM or Prisma) are implemented by dynamically controlling which relations are loaded using query builder options, conditional `relations` arrays, or runtime-constructed query builders based on request parameters, roles, or feature flags.
+
+---
+
+## Explanation
+
+In NestJS, “conditional relations” usually means **deciding at runtime whether to join/load related entities** (e.g., `User -> posts`, `User -> profile`) depending on:
+
+- API query params (`?include=posts`)
+- Authorization level (admin vs user)
+- Performance constraints (avoid N+1 / over-fetching)
+- Feature flags or tenant configuration
+
+### 1. TypeORM approach (most common in NestJS)
+
+You typically have three strategies:
+
+#### A. Static `relations` array (simple, but not flexible)
+
+```ts
+this.userRepository.find({
+  relations: ["profile", "posts"],
+});
+```
+
+❌ Always loads relations → inefficient for large APIs.
+
+---
+
+#### B. Conditional relations via dynamic object
+
+```ts
+const relations: Record<string, boolean> = {};
+
+if (includeProfile) relations.profile = true;
+if (includePosts) relations.posts = true;
+
+return this.userRepository.find({
+  relations,
+});
+```
+
+---
+
+#### C. QueryBuilder (most powerful / enterprise-grade)
+
+```ts
+const qb = this.userRepository.createQueryBuilder("user");
+
+if (includeProfile) {
+  qb.leftJoinAndSelect("user.profile", "profile");
+}
+
+if (includePosts) {
+  qb.leftJoinAndSelect("user.posts", "posts");
+}
+
+return qb.getMany();
+```
+
+👉 This is the preferred approach in large systems because:
+
+- Fine-grained control over joins
+- Better performance tuning
+- Easier to add filtering/pagination per relation
+
+---
+
+### 2. Prisma approach (if used in NestJS)
+
+Prisma makes conditional relations very explicit:
+
+```ts
+return this.prisma.user.findMany({
+  include: {
+    profile: includeProfile,
+    posts: includePosts,
+  },
+});
+```
+
+Or fully dynamic:
+
+```ts
+const include: Prisma.UserInclude = {};
+
+if (includeProfile) include.profile = true;
+if (includePosts) include.posts = true;
+
+return this.prisma.user.findMany({ include });
+```
+
+---
+
+### 3. Architectural pattern (recommended in senior systems)
+
+In production-grade NestJS systems, you typically **don’t pass raw query params directly to ORM**.
+
+Instead:
+
+1. Controller parses request → DTO
+2. Service builds a **relation selection map**
+3. Repository executes query builder
+
+Example:
+
+```ts
+type UserRelations = {
+  profile?: boolean;
+  posts?: boolean;
+};
+```
+
+This avoids:
+
+- Over-fetching sensitive relations
+- Client-driven query explosion (GraphQL-like abuse in REST)
+- Security leaks (e.g., exposing `roles`, `auditLogs` unintentionally)
+
+---
+
+### 4. Scalability considerations
+
+- Always cap relation depth (avoid recursive joins)
+- Prefer **select + join only needed columns**
+- Use **lazy loading cautiously** (can cause N+1 issues)
+- Cache frequent relation combinations (Redis layer)
+- For heavy systems, consider **CQRS read models** instead of dynamic joins
+
+---
+
+### 5. Testing strategy
+
+- Unit test service logic that builds relation map
+- Mock repository/query builder
+- E2E test to ensure correct SQL joins are triggered
+
+---
+
+## Example
+
+```ts
+// user.controller.ts
+@Get()
+getUsers(@Query() query: { includeProfile?: string; includePosts?: string }) {
+  return this.userService.findAll({
+    includeProfile: query.includeProfile === 'true',
+    includePosts: query.includePosts === 'true',
+  });
+}
+```
+
+```ts
+// user.service.ts
+@Injectable()
+export class UserService {
+  constructor(
+    @InjectRepository(User)
+    private readonly userRepo: Repository<User>,
+  ) {}
+
+  findAll(options: { includeProfile?: boolean; includePosts?: boolean }) {
+    const qb = this.userRepo.createQueryBuilder("user");
+
+    if (options.includeProfile) {
+      qb.leftJoinAndSelect("user.profile", "profile");
+    }
+
+    if (options.includePosts) {
+      qb.leftJoinAndSelect("user.posts", "posts");
+    }
+
+    return qb.getMany();
+  }
+}
+```
+
+```ts
+// user.entity.ts
+@Entity()
+export class User {
+  @PrimaryGeneratedColumn()
+  id: number;
+
+  @OneToOne(() => Profile, (p) => p.user)
+  profile: Profile;
+
+  @OneToMany(() => Post, (p) => p.user)
+  posts: Post[];
+}
+```
+
+---
+
+## Pitfalls
+
+- Loading all relations by default → major performance degradation
+- Letting clients fully control relations → security risk (data exposure)
+- Overusing eager loading → hidden DB cost spikes
+- Complex query builders becoming hard to maintain without abstraction layer
+- Not indexing foreign keys → slow joins under conditional loading
+
 ## Question 2. How do you implement **soft-delete cascading rules**?
 
 ## Question 3. How do you implement **complex join queries dynamically**?
