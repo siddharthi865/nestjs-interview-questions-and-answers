@@ -25,6 +25,219 @@
 
 ## Question 1. How do you create route prefixes in NestJS?
 
+# Short answer
+
+In NestJS, route prefixes can be created at multiple levels:
+
+1. **Global prefix** – applied to all routes using `app.setGlobalPrefix()`.
+2. **Controller prefix** – defined in `@Controller('prefix')`.
+3. **Versioned/API grouping prefixes** – often combined with global prefixes (e.g., `/api/v1/users`).
+
+Example:
+
+```ts
+app.setGlobalPrefix("api");
+```
+
+and
+
+```ts
+@Controller('users')
+```
+
+creates routes like:
+
+```
+/api/users
+```
+
+---
+
+# Explanation
+
+Route prefixes help organize APIs, support versioning, improve maintainability, and simplify large-scale applications.
+
+## 1. Global Route Prefix
+
+The most common production pattern is configuring a global prefix in `main.ts`.
+
+```ts
+app.setGlobalPrefix("api");
+```
+
+All controllers automatically inherit the prefix:
+
+```text
+/api/users
+/api/orders
+/api/products
+```
+
+### Why use it?
+
+- Clean API namespace separation.
+- Easier reverse proxy and gateway configuration.
+- Simplifies API versioning (`api/v1`).
+- Prevents collisions with health checks, static assets, or frontend routes.
+
+Example:
+
+```ts
+app.setGlobalPrefix("api/v1");
+```
+
+Produces:
+
+```text
+/api/v1/users
+/api/v1/orders
+```
+
+---
+
+## 2. Controller-Level Prefix
+
+NestJS controllers define route segments using the `@Controller()` decorator.
+
+```ts
+@Controller("users")
+export class UsersController {}
+```
+
+Every handler inside the controller is prefixed with `users`.
+
+```ts
+@Get()
+findAll()
+```
+
+becomes:
+
+```text
+GET /users
+```
+
+and
+
+```ts
+@Get(':id')
+findOne()
+```
+
+becomes:
+
+```text
+GET /users/:id
+```
+
+---
+
+## 3. Combining Global and Controller Prefixes
+
+NestJS automatically concatenates prefixes.
+
+```ts
+app.setGlobalPrefix('api/v1');
+
+@Controller('users')
+```
+
+Results:
+
+```text
+GET /api/v1/users
+GET /api/v1/users/:id
+```
+
+This is the recommended enterprise pattern.
+
+---
+
+## 4. Prefixes with API Versioning
+
+NestJS provides built-in versioning support.
+
+```ts
+app.enableVersioning({
+  type: VersioningType.URI,
+});
+```
+
+```ts
+@Controller({
+  path: "users",
+  version: "1",
+})
+export class UsersV1Controller {}
+```
+
+Produces:
+
+```text
+/v1/users
+```
+
+Combined with a global prefix:
+
+```text
+/api/v1/users
+```
+
+Useful when maintaining multiple API versions simultaneously.
+
+---
+
+## Example
+
+```ts
+import { Controller, Get, Module } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+
+@Controller("users")
+class UsersController {
+  @Get()
+  findAll(): string {
+    return "All users";
+  }
+}
+
+@Module({
+  controllers: [UsersController],
+})
+class AppModule {}
+
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule);
+
+  app.setGlobalPrefix("api/v1");
+
+  await app.listen(3000);
+}
+
+bootstrap();
+```
+
+Request:
+
+```http
+GET http://localhost:3000/api/v1/users
+```
+
+Response:
+
+```text
+All users
+```
+
+---
+
+# Pitfalls
+
+- **Changing global prefixes later** can break existing clients unless versioning is used.
+- **Hardcoding URLs in frontend applications** makes migrations difficult; use API configuration variables.
+- **Multiple nested prefixes** (`api/v1/admin/users`) can become difficult to maintain if route structure isn't documented.
+- When using **Swagger/OpenAPI**, ensure the global prefix is reflected in Swagger configuration, otherwise generated URLs may be incorrect.
+
 ## Question 2. How do you implement **versioned routes**?
 
 ## Question 3. How do you implement **route parameters**?
