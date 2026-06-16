@@ -25,6 +25,153 @@
 
 ## Question 1. How do you implement **multi-role JWT access tokens**?
 
+## Short answer
+
+Multi-role JWT access tokens are implemented by embedding an array of roles (e.g., `roles: string[]`) inside the JWT payload, then enforcing authorization using a custom NestJS `RolesGuard` that checks whether the user’s roles intersect with the required roles declared via a custom `@Roles()` decorator.
+
+---
+
+## Explanation
+
+In a NestJS system, multi-role JWT access control typically combines:
+
+1. **Authentication layer (JWT Strategy)**
+   - Validates token signature and extracts payload.
+   - Attaches `user` object (including roles) to `request`.
+
+2. **Authorization layer (Roles-based Guard)**
+   - Reads metadata from route handlers (`@Roles()` decorator).
+   - Compares required roles vs. user roles from JWT payload.
+
+3. **Token design**
+   - JWT payload contains:
+
+     ```ts
+     {
+       sub: userId,
+       email: string,
+       roles: string[]   // key part for multi-role support
+     }
+     ```
+
+### Architectural considerations
+
+- **Scalability**: Stateless JWT allows horizontal scaling (no DB lookup required for each request unless role validation is dynamic).
+- **Security trade-off**:
+  - Pros: fast, no DB hit
+  - Cons: role changes don’t reflect until token refresh/expiry
+
+- **Enterprise pattern**:
+  - Combine JWT roles with **policy-based access control (RBAC/ABAC)** for complex systems.
+
+- **Testing**:
+  - Unit test guards in isolation
+  - E2E test protected routes with valid/invalid tokens
+
+- **Deployment**:
+  - Ensure consistent JWT secret across services (or use public/private key pairs for RS256 in microservices)
+
+---
+
+## Example
+
+### 1. Roles Decorator
+
+```ts
+import { SetMetadata } from "@nestjs/common";
+
+export const ROLES_KEY = "roles";
+export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles);
+```
+
+---
+
+### 2. Roles Guard
+
+```ts
+import { CanActivate, ExecutionContext, Injectable } from "@nestjs/common";
+import { Reflector } from "@nestjs/core";
+import { ROLES_KEY } from "./roles.decorator";
+
+@Injectable()
+export class RolesGuard implements CanActivate {
+  constructor(private reflector: Reflector) {}
+
+  canActivate(context: ExecutionContext): boolean {
+    const requiredRoles = this.reflector.getAllAndOverride<string[]>(
+      ROLES_KEY,
+      [context.getHandler(), context.getClass()],
+    );
+
+    if (!requiredRoles) return true;
+
+    const request = context.switchToHttp().getRequest();
+    const user = request.user;
+
+    return requiredRoles.some((role) => user.roles?.includes(role));
+  }
+}
+```
+
+---
+
+### 3. JWT Strategy (multi-role payload)
+
+```ts
+import { Injectable } from "@nestjs/common";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor() {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: process.env.JWT_SECRET,
+    });
+  }
+
+  async validate(payload: any) {
+    return {
+      userId: payload.sub,
+      email: payload.email,
+      roles: payload.roles, // critical for RBAC
+    };
+  }
+}
+```
+
+---
+
+### 4. Controller Usage
+
+```ts
+import { Controller, Get, UseGuards } from "@nestjs/common";
+import { JwtAuthGuard } from "./jwt-auth.guard";
+import { RolesGuard } from "./roles.guard";
+import { Roles } from "./roles.decorator";
+
+@Controller("admin")
+@UseGuards(JwtAuthGuard, RolesGuard)
+export class AdminController {
+  @Get()
+  @Roles("admin", "superadmin")
+  getAdminData() {
+    return { message: "Admin access granted" };
+  }
+}
+```
+
+---
+
+## Pitfalls
+
+- **Stale roles in JWT**: role updates won’t apply until token refresh/expiry
+- **Overloading JWT payload**: adding too many roles/claims increases token size
+- **Weak RBAC model**: only roles-based checks become insufficient for complex permissions (ABAC needed)
+- **Guard ordering issues**: `JwtAuthGuard` must run before `RolesGuard`
+- **Microservices inconsistency**: different services validating roles differently if not standardized
+
 ## Question 2. How do you implement **dynamic permissions per user**?
 
 ## Question 3. How do you implement **JWT token revocation**?
