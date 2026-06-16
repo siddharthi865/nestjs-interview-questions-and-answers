@@ -25,6 +25,143 @@
 
 ## Question 1. How do you implement **provider factories with multiple dependencies**?
 
+## Short answer
+
+In NestJS, provider factories with multiple dependencies are implemented using `useFactory` along with `inject` (or parameter-based DI in class-based factories). This allows you to construct a provider dynamically using other services/config values while keeping DI fully testable and composable.
+
+---
+
+## Explanation
+
+### 1. What a factory provider is in NestJS
+
+A factory provider lets you define how a value/service is created at runtime instead of using a class. This is useful when:
+
+- Initialization requires multiple dependencies
+- You need conditional or computed instantiation
+- You integrate third-party SDKs (AWS, Stripe, Redis clients, etc.)
+
+NestJS supports this via:
+
+```ts
+{
+  provide: TOKEN,
+  useFactory: (...deps) => value,
+  inject: [Dep1, Dep2],
+}
+```
+
+---
+
+### 2. Multiple dependencies pattern
+
+When a factory depends on multiple providers, Nest resolves them in order defined in `inject`.
+
+Key characteristics:
+
+- Fully DI-aware (respects scopes: singleton/request/transient)
+- Supports async factories (`useFactory: async`)
+- Works with configuration + services + external clients
+
+### Architectural implications
+
+- Encourages composition over inheritance
+- Centralizes integration wiring (good for infrastructure modules)
+- Keeps business services clean from construction logic
+- Often used in “integration modules” (e.g., `DatabaseModule`, `CacheModule`)
+
+---
+
+### 3. Scalability considerations
+
+- Factories are ideal for **lazy initialization of external resources**
+- Can defer heavy client creation (Redis, S3, Kafka)
+- Helps isolate environment-specific wiring (dev/staging/prod)
+- Works well with `ConfigModule` for 12-factor apps
+
+---
+
+### 4. Testing implications
+
+- Easy to override using `overrideProvider()`
+- You can mock dependencies independently
+- Encourages deterministic construction of external clients
+
+---
+
+## Example
+
+### Scenario: Create an S3 client using config + logger
+
+```ts
+// s3.constants.ts
+export const S3_CLIENT = Symbol("S3_CLIENT");
+```
+
+```ts
+// s3.module.ts
+import { Module, Logger } from "@nestjs/common";
+import { ConfigService } from "@nestjs/config";
+
+class S3Client {
+  constructor(
+    public readonly region: string,
+    public readonly bucket: string,
+  ) {}
+}
+
+@Module({
+  providers: [
+    {
+      provide: S3_CLIENT,
+      useFactory: async (configService: ConfigService, logger: Logger) => {
+        const region = configService.get<string>("AWS_REGION")!;
+        const bucket = configService.get<string>("S3_BUCKET")!;
+
+        logger.log(`Initializing S3 client for bucket: ${bucket}`);
+
+        // simulate async initialization (e.g., credential fetch)
+        await new Promise((r) => setTimeout(r, 50));
+
+        return new S3Client(region, bucket);
+      },
+      inject: [ConfigService, Logger],
+    },
+    Logger,
+  ],
+  exports: [S3_CLIENT],
+})
+export class S3Module {}
+```
+
+### Consuming it
+
+```ts
+import { Inject, Injectable } from "@nestjs/common";
+import { S3_CLIENT } from "./s3.constants";
+
+@Injectable()
+export class FileService {
+  constructor(@Inject(S3_CLIENT) private readonly s3Client: S3Client) {}
+
+  getBucketInfo() {
+    return {
+      region: this.s3Client.region,
+      bucket: this.s3Client.bucket,
+    };
+  }
+}
+```
+
+---
+
+## Pitfalls
+
+- ❌ Forgetting to align `inject` order with factory parameters → runtime DI mismatch
+- ❌ Creating heavy clients without caching → repeated initialization overhead
+- ❌ Using request-scoped providers unintentionally → performance degradation under load
+- ❌ Overusing factories instead of proper services → reduces test clarity and structure
+
 ## Question 2. How do you implement **conditional provider selection**?
 
 ## Question 3. How do you implement **provider overrides in testing**?
