@@ -25,6 +25,197 @@
 
 ## Question 1. How do you integrate **AWS S3 for file uploads**?
 
+## Short answer
+
+You integrate AWS S3 in NestJS by using the AWS SDK (`@aws-sdk/client-s3`) inside a dedicated provider/service, handling file uploads via `multer` (or stream-based upload), and exposing an API endpoint that uploads files directly or via a service abstraction.
+
+---
+
+## Explanation
+
+### 1. Architecture (senior-level view)
+
+In production NestJS systems, S3 integration is typically designed as:
+
+- **Controller layer** → receives multipart/form-data upload
+- **Interceptor (Multer)** → handles file parsing (memory or disk storage)
+- **Service layer (S3Service)** → encapsulates AWS SDK logic
+- **Provider (ConfigModule)** → injects AWS credentials securely
+- **Optional presigned URLs** → for direct client-to-S3 uploads (best scalability)
+
+### 2. Upload strategies
+
+#### A. Server-mediated upload (simple)
+
+Client → NestJS → S3
+
+Pros:
+
+- Easy validation, security checks, transformations
+  Cons:
+- Higher server bandwidth cost
+- Bottleneck at API layer
+
+#### B. Presigned URL upload (recommended for scale)
+
+Client → S3 directly using signed URL
+
+Pros:
+
+- Highly scalable
+- Minimal backend load
+  Cons:
+- Requires careful auth + permission design
+
+---
+
+### 3. Security considerations
+
+- Store credentials in **AWS Secrets Manager / environment variables**
+- Use **least privilege IAM roles** (S3 bucket scoped)
+- Validate file types + size in NestJS
+- Use **signed URLs expiration (short TTL)**
+- Consider antivirus scanning pipeline (event-driven via S3 triggers)
+
+---
+
+### 4. Scalability considerations
+
+- Avoid memory storage for large files (`multer memoryStorage` only for small files)
+- Prefer **streaming uploads**
+- Use **multipart upload for large files (>5MB–100MB+)**
+- Offload static file serving to S3 + CloudFront CDN
+
+---
+
+### 5. Testing strategy
+
+- Mock AWS SDK using dependency injection
+- Use localstack for integration tests
+- Validate controller + service separately
+- E2E tests should verify upload response metadata (not actual AWS upload in CI)
+
+---
+
+## Example
+
+### Install dependencies
+
+```bash
+npm install @aws-sdk/client-s3 @nestjs/platform-express multer
+```
+
+---
+
+### S3 Module
+
+```ts
+import { Module } from "@nestjs/common";
+import { ConfigModule, ConfigService } from "@nestjs/config";
+import { S3Client } from "@aws-sdk/client-s3";
+import { S3Service } from "./s3.service";
+
+@Module({
+  imports: [ConfigModule],
+  providers: [
+    {
+      provide: "S3_CLIENT",
+      inject: [ConfigService],
+      useFactory: (config: ConfigService) => {
+        return new S3Client({
+          region: config.get<string>("AWS_REGION"),
+          credentials: {
+            accessKeyId: config.get<string>("AWS_ACCESS_KEY_ID")!,
+            secretAccessKey: config.get<string>("AWS_SECRET_ACCESS_KEY")!,
+          },
+        });
+      },
+    },
+    S3Service,
+  ],
+  exports: [S3Service],
+})
+export class S3Module {}
+```
+
+---
+
+### S3 Service
+
+```ts
+import { Inject, Injectable } from "@nestjs/common";
+import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+
+@Injectable()
+export class S3Service {
+  constructor(@Inject("S3_CLIENT") private readonly s3: S3Client) {}
+
+  async uploadFile(params: {
+    bucket: string;
+    key: string;
+    buffer: Buffer;
+    mimetype: string;
+  }): Promise<string> {
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: params.bucket,
+        Key: params.key,
+        Body: params.buffer,
+        ContentType: params.mimetype,
+      }),
+    );
+
+    return `https://${params.bucket}.s3.amazonaws.com/${params.key}`;
+  }
+}
+```
+
+---
+
+### Controller with Multer
+
+```ts
+import {
+  Controller,
+  Post,
+  UploadedFile,
+  UseInterceptors,
+} from "@nestjs/common";
+import { FileInterceptor } from "@nestjs/platform-express";
+import { S3Service } from "./s3.service";
+
+@Controller("files")
+export class FileController {
+  constructor(private readonly s3Service: S3Service) {}
+
+  @Post("upload")
+  @UseInterceptors(FileInterceptor("file"))
+  async upload(@UploadedFile() file: Express.Multer.File) {
+    const key = `uploads/${Date.now()}-${file.originalname}`;
+
+    const url = await this.s3Service.uploadFile({
+      bucket: process.env.AWS_BUCKET_NAME!,
+      key,
+      buffer: file.buffer,
+      mimetype: file.mimetype,
+    });
+
+    return { url };
+  }
+}
+```
+
+---
+
+## Pitfalls
+
+- Using **memory storage for large files** → can crash Node.js due to heap pressure
+- Missing **IAM least-privilege policies** → security risk (public bucket exposure)
+- Not handling **S3 retries / network failures**
+- Hardcoding bucket names or credentials instead of using `ConfigModule`
+- Returning S3 URL without CDN → performance degradation globally
+- Ignoring **multipart upload for large files**
+
 ## Question 2. How do you integrate **Stripe or payment gateways**?
 
 ## Question 3. How do you integrate **Firebase services**?
