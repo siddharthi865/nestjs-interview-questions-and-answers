@@ -25,6 +25,148 @@
 
 ## Question 1. How does NestJS implement **Inversion of Control (IoC)** internally?
 
+## Short answer
+
+NestJS implements Inversion of Control (IoC) using a **dependency injection (DI) container** that automatically resolves and injects providers based on metadata (primarily TypeScript decorators + reflection). Instead of manually instantiating dependencies, NestJS creates and manages them in a **module-scoped IoC container**.
+
+---
+
+## Explanation
+
+At its core, NestJS is built around a **metadata-driven IoC container** inspired by Angular. The key idea is:
+
+> You declare dependencies; NestJS resolves and injects them at runtime.
+
+### 1. Metadata + Reflection (design-time → runtime bridge)
+
+Nest uses `reflect-metadata` to store dependency information:
+
+- `@Injectable()` marks a class as a provider
+- Constructor parameter types are emitted by TypeScript (`design:paramtypes`)
+- Custom tokens can override type-based resolution
+
+Example metadata:
+
+```ts
+Reflect.getMetadata("design:paramtypes", SomeService);
+```
+
+This allows Nest to know:
+
+> “What does this class depend on?”
+
+---
+
+### 2. Module-based DI container
+
+Each `@Module()` creates a **scoped container context**:
+
+- Providers registered in `providers: []`
+- Exported providers shared across modules
+- Each module has its own injector hierarchy
+
+Nest builds a **module graph**, not just a flat container.
+
+---
+
+### 3. Provider resolution algorithm
+
+When a class is requested:
+
+1. Nest checks if it already exists in the module scope (singleton by default)
+2. If not, it:
+   - Reads constructor metadata
+   - Resolves each dependency recursively
+   - Instantiates dependencies in correct order
+
+3. Stores instance in container (unless `Scope.REQUEST` or `TRANSIENT`)
+
+---
+
+### 4. IoC types supported
+
+NestJS supports multiple lifecycle scopes:
+
+- **Singleton (default)** → shared across app
+- **Request scope** → new instance per request
+- **Transient** → new instance every injection
+
+This is crucial for performance vs isolation trade-offs.
+
+---
+
+### 5. Provider tokens and abstraction
+
+IoC is not limited to classes:
+
+- Class-based providers
+- Value providers
+- Factory providers
+- Async providers
+
+This allows abstraction like:
+
+- swapping implementations (e.g., mock DB, Redis vs memory cache)
+- environment-based configuration
+
+---
+
+### 6. Circular dependency handling
+
+Nest resolves circular dependencies using:
+
+- forward references (`forwardRef`)
+- lazy resolution inside DI container
+
+But this increases complexity and can indicate design issues.
+
+---
+
+### Example
+
+```ts
+import { Module, Injectable } from "@nestjs/common";
+
+@Injectable()
+class UserRepository {
+  findAll() {
+    return ["user1", "user2"];
+  }
+}
+
+@Injectable()
+class UserService {
+  constructor(private readonly repo: UserRepository) {}
+
+  getUsers() {
+    return this.repo.findAll();
+  }
+}
+
+@Module({
+  providers: [UserService, UserRepository],
+  exports: [UserService],
+})
+class UserModule {}
+```
+
+Nest internally:
+
+- detects `UserService` depends on `UserRepository`
+- creates `UserRepository` first
+- injects it into `UserService`
+- caches both in module container
+
+---
+
+## Pitfalls
+
+- Overusing request-scoped providers → **severe performance degradation**
+- Hidden circular dependencies → runtime injection errors or `undefined` providers
+- Misconfigured module exports → providers not visible across modules
+- Over-reliance on global modules → breaks modular boundaries and testability
+- Reflection-based DI can break in edge cases (e.g., pure JS without metadata)
+
 ## Question 2. How does **Reflector** work in NestJS?
 
 ## Question 3. How do **custom decorators** interact with metadata?
