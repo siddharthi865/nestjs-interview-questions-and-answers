@@ -25,6 +25,222 @@
 
 ## Question 1. How do you implement JWT authentication in NestJS?
 
+## Short answer
+
+JWT authentication in NestJS is implemented using the `@nestjs/passport` integration with a JWT strategy (`passport-jwt`), where a login endpoint issues a signed token and a guard (`AuthGuard('jwt')`) validates it on protected routes.
+
+---
+
+## Explanation
+
+### 1. High-level architecture
+
+JWT auth in NestJS typically follows this flow:
+
+1. **User logs in** → credentials validated via `AuthService`
+2. **JWT is signed** using `JwtService` (`@nestjs/jwt`)
+3. Client stores token (usually in memory or secure storage)
+4. Client sends token in `Authorization: Bearer <token>`
+5. **JWT Strategy validates token** on each request
+6. `AuthGuard('jwt')` protects routes
+
+### Key NestJS components involved:
+
+- **AuthModule**: orchestrates everything
+- **AuthService**: validates user + issues tokens
+- **JwtStrategy**: validates and decodes JWT
+- **JwtAuthGuard**: protects endpoints
+- **Passport integration**: standard auth abstraction layer
+
+---
+
+### 2. Security, scalability, and design considerations
+
+#### Security
+
+- Always sign tokens with a strong secret or asymmetric keys (RS256 preferred in enterprise systems)
+- Use short-lived access tokens + refresh token rotation
+- Never store sensitive data in JWT payload (only claims like `sub`, `roles`)
+- Consider revocation strategy (token blacklist or versioning)
+
+#### Scalability
+
+- JWT is stateless → works well in horizontally scaled microservices
+- Avoid DB lookup per request unless you enforce revocation or role sync
+- Combine with Redis if you need session invalidation
+
+#### Testing
+
+- Unit test `AuthService.validateUser`
+- E2E test guarded routes using `supertest`
+- Mock `JwtService` for isolation
+
+#### Deployment
+
+- Store secrets in environment variables or secret managers (AWS Secrets Manager, Vault)
+- Rotate keys periodically
+- Use HTTPS always (JWT is not encrypted by default)
+
+---
+
+## Example
+
+### Install dependencies
+
+```bash
+npm install @nestjs/jwt @nestjs/passport passport passport-jwt bcrypt
+npm install -D @types/passport-jwt
+```
+
+---
+
+### auth.module.ts
+
+```ts
+import { Module } from "@nestjs/common";
+import { JwtModule } from "@nestjs/jwt";
+import { PassportModule } from "@nestjs/passport";
+import { AuthService } from "./auth.service";
+import { JwtStrategy } from "./jwt.strategy";
+
+@Module({
+  imports: [
+    PassportModule,
+    JwtModule.register({
+      secret: process.env.JWT_SECRET,
+      signOptions: { expiresIn: "15m" },
+    }),
+  ],
+  providers: [AuthService, JwtStrategy],
+  exports: [AuthService],
+})
+export class AuthModule {}
+```
+
+---
+
+### auth.service.ts
+
+```ts
+import { Injectable, UnauthorizedException } from "@nestjs/common";
+import { JwtService } from "@nestjs/jwt";
+import * as bcrypt from "bcrypt";
+
+@Injectable()
+export class AuthService {
+  constructor(private readonly jwtService: JwtService) {}
+
+  async validateUser(username: string, password: string) {
+    const user = await this.findUserByUsername(username); // pretend DB call
+
+    if (!user) throw new UnauthorizedException();
+
+    const passwordValid = await bcrypt.compare(password, user.passwordHash);
+
+    if (!passwordValid) throw new UnauthorizedException();
+
+    return user;
+  }
+
+  async login(user: any) {
+    const payload = {
+      sub: user.id,
+      username: user.username,
+      roles: user.roles,
+    };
+
+    return {
+      access_token: this.jwtService.sign(payload),
+    };
+  }
+
+  private async findUserByUsername(username: string) {
+    return {
+      id: 1,
+      username,
+      passwordHash: await bcrypt.hash("pass", 10),
+      roles: ["user"],
+    };
+  }
+}
+```
+
+---
+
+### jwt.strategy.ts
+
+```ts
+import { Injectable } from "@nestjs/common";
+import { PassportStrategy } from "@nestjs/passport";
+import { ExtractJwt, Strategy } from "passport-jwt";
+
+@Injectable()
+export class JwtStrategy extends PassportStrategy(Strategy) {
+  constructor() {
+    super({
+      jwtFromRequest: ExtractJwt.fromAuthHeaderAsBearerToken(),
+      secretOrKey: process.env.JWT_SECRET,
+    });
+  }
+
+  async validate(payload: any) {
+    // attaches to request.user
+    return {
+      userId: payload.sub,
+      username: payload.username,
+      roles: payload.roles,
+    };
+  }
+}
+```
+
+---
+
+### auth.controller.ts
+
+```ts
+import {
+  Controller,
+  Post,
+  Body,
+  UseGuards,
+  Get,
+  Request,
+} from "@nestjs/common";
+import { AuthService } from "./auth.service";
+import { AuthGuard } from "@nestjs/passport";
+
+@Controller("auth")
+export class AuthController {
+  constructor(private readonly authService: AuthService) {}
+
+  @Post("login")
+  async login(@Body() body: { username: string; password: string }) {
+    const user = await this.authService.validateUser(
+      body.username,
+      body.password,
+    );
+    return this.authService.login(user);
+  }
+
+  @UseGuards(AuthGuard("jwt"))
+  @Get("profile")
+  getProfile(@Request() req) {
+    return req.user;
+  }
+}
+```
+
+---
+
+## Pitfalls
+
+- Storing too much data in JWT → large headers, security risks
+- No token expiration or refresh strategy → security vulnerability
+- Using symmetric secrets across multiple services without rotation strategy
+- Forgetting to validate `audience` and `issuer` in enterprise setups
+- Not handling logout/revocation in stateless systems
+
 ## Question 2. How do you implement Passport.js strategies in NestJS?
 
 ## Question 3. What is the difference between **local, JWT, and OAuth strategies**?
