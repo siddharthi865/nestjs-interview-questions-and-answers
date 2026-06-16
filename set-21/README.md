@@ -25,6 +25,150 @@
 
 ## Question 1. How do you implement **conditional routing** based on request headers?
 
+## Short answer
+
+In NestJS, conditional routing based on request headers is typically implemented using **Guards, Middleware, or Interceptors** rather than defining multiple routes. A **Guard** is the most idiomatic approach because it integrates with the request lifecycle and can allow/deny access or redirect logic based on headers.
+
+---
+
+## Explanation
+
+### 1. Design options (senior-level view)
+
+#### A. Guards (recommended for routing decisions)
+
+- Best for **access control or request shaping**
+- Executes **before route handler execution**
+- Can dynamically allow/deny or redirect logic based on headers
+
+Use cases:
+
+- A/B testing routes
+- Versioned APIs via headers (`x-api-version`)
+- Feature flag-based routing
+- Multi-tenant routing
+
+#### B. Middleware (best for pre-processing)
+
+- Runs **before Nest routing**
+- Good for:
+  - attaching metadata to request
+  - rewriting request properties
+
+- Less powerful than guards for decision-making
+
+#### C. Interceptors (response-level logic)
+
+- Not ideal for routing decisions
+- Useful if behavior changes response format instead of routing
+
+---
+
+### 2. Architecture considerations
+
+#### Scalability
+
+- Header-based routing should remain **stateless**
+- Avoid database calls inside guards unless cached
+- Prefer feature flags via external config service (Redis/LaunchDarkly/etc.)
+
+#### Security
+
+- Always validate header values (avoid injection-like misuse)
+- Never trust headers without authentication context if sensitive routing is involved
+
+#### Observability
+
+- Log routing decisions via interceptor or guard metadata
+- Useful for debugging API version drift or A/B routing issues
+
+#### Deployment
+
+- Works seamlessly in containerized or serverless environments
+- Can be combined with API Gateway routing for hybrid strategy
+
+---
+
+## Example
+
+### Header-based conditional routing using Guard
+
+```ts
+import {
+  CanActivate,
+  ExecutionContext,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { Request } from "express";
+
+@Injectable()
+export class ApiVersionGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const req = context.switchToHttp().getRequest<Request>();
+
+    const version = req.headers["x-api-version"];
+
+    if (version === "v1") {
+      req.url = "/v1" + req.url;
+      return true;
+    }
+
+    if (version === "v2") {
+      req.url = "/v2" + req.url;
+      return true;
+    }
+
+    throw new NotFoundException("Unsupported API version");
+  }
+}
+```
+
+### Controller setup
+
+```ts
+import { Controller, Get, UseGuards } from "@nestjs/common";
+import { ApiVersionGuard } from "./api-version.guard";
+
+@UseGuards(ApiVersionGuard)
+@Controller()
+export class AppController {
+  @Get("v1/hello")
+  getV1() {
+    return { version: "v1", message: "Hello from v1" };
+  }
+
+  @Get("v2/hello")
+  getV2() {
+    return { version: "v2", message: "Hello from v2" };
+  }
+}
+```
+
+### Module wiring
+
+```ts
+import { Module } from "@nestjs/common";
+import { AppController } from "./app.controller";
+import { ApiVersionGuard } from "./api-version.guard";
+
+@Module({
+  controllers: [AppController],
+  providers: [ApiVersionGuard],
+})
+export class AppModule {}
+```
+
+---
+
+## Pitfalls
+
+- ❌ Mutating `req.url` can break logging, metrics, or proxy layers if not carefully handled
+- ❌ Overusing guards for complex routing logic can lead to hard-to-debug flows
+- ❌ Header-based routing without validation opens inconsistencies and spoofing risks
+- ❌ Middleware-based routing may execute too early, bypassing Nest route resolution assumptions
+- ❌ Coupling API versioning logic inside application layer instead of gateway layer can reduce maintainability
+
 ## Question 2. How do you implement **dynamic route handlers** at runtime?
 
 ## Question 3. How do you handle **optional route parameters**?
