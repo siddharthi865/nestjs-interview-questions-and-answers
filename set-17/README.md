@@ -25,6 +25,138 @@
 
 ## Question 1. How do you implement **global caching** in NestJS?
 
+## Short answer
+
+Global caching in NestJS is implemented using the `@nestjs/cache-manager` package with a **CacheModule configured as global** (`isGlobal: true`) and optionally backed by Redis for distributed caching.
+
+---
+
+## Explanation
+
+In NestJS, caching is typically built on top of the **Cache Manager abstraction**, which supports multiple stores (in-memory, Redis, Memcached, etc.). Global caching means:
+
+- Cache is available across all modules without re-importing `CacheModule`
+- Controllers/services can inject `CACHE_MANAGER`
+- You can apply caching at:
+  - Method level (manual caching via `cacheManager.get/set`)
+  - Route level (via `CacheInterceptor`)
+  - Global level (interceptor applied via `APP_INTERCEPTOR`)
+
+### Architecture Overview
+
+1. **CacheModule (global scope)**
+   Registers cache provider in DI container
+
+2. **Cache Interceptor (optional but common)**
+   Automatically caches HTTP responses based on request key
+
+3. **Cache Store (in-memory or Redis)**
+   - In-memory: fast, single instance only
+   - Redis: scalable across multiple instances (recommended for production)
+
+---
+
+### Scalability & Trade-offs
+
+| Strategy        | Pros                  | Cons                                 |
+| --------------- | --------------------- | ------------------------------------ |
+| In-memory cache | Fast, simple          | Not shared across pods/instances     |
+| Redis cache     | Distributed, scalable | Network latency, external dependency |
+| Hybrid          | Flexible fallback     | More complexity                      |
+
+---
+
+## Example
+
+### 1. Global CacheModule setup (Redis-backed)
+
+```ts
+// app.module.ts
+import { Module } from "@nestjs/common";
+import { CacheModule } from "@nestjs/cache-manager";
+import { APP_INTERCEPTOR } from "@nestjs/core";
+import { CacheInterceptor } from "@nestjs/cache-manager";
+import * as redisStore from "cache-manager-ioredis";
+
+@Module({
+  imports: [
+    CacheModule.register({
+      isGlobal: true,
+      store: redisStore,
+      host: "localhost",
+      port: 6379,
+      ttl: 60, // seconds
+    }),
+  ],
+  providers: [
+    {
+      provide: APP_INTERCEPTOR,
+      useClass: CacheInterceptor,
+    },
+  ],
+})
+export class AppModule {}
+```
+
+---
+
+### 2. Using cache manually in a service
+
+```ts
+import { Injectable, Inject } from "@nestjs/common";
+import { CACHE_MANAGER } from "@nestjs/cache-manager";
+import { Cache } from "cache-manager";
+
+@Injectable()
+export class UsersService {
+  constructor(@Inject(CACHE_MANAGER) private cacheManager: Cache) {}
+
+  async findUser(id: string) {
+    const cacheKey = `user:${id}`;
+
+    const cached = await this.cacheManager.get(cacheKey);
+    if (cached) return cached;
+
+    const user = await this.fetchFromDb(id);
+
+    await this.cacheManager.set(cacheKey, user, 60); // TTL 60s
+    return user;
+  }
+
+  private async fetchFromDb(id: string) {
+    return { id, name: "John Doe" };
+  }
+}
+```
+
+---
+
+### 3. Controller-level automatic caching
+
+```ts
+import { Controller, Get, UseInterceptors } from "@nestjs/common";
+import { CacheInterceptor } from "@nestjs/cache-manager";
+
+@Controller("users")
+@UseInterceptors(CacheInterceptor)
+export class UsersController {
+  @Get()
+  findAll() {
+    return [{ id: 1, name: "Alice" }];
+  }
+}
+```
+
+---
+
+## Pitfalls
+
+- **Cache invalidation complexity** (most common production issue)
+- **Stale data risks** if TTLs are too long or invalidation is missing
+- **Memory leaks** with in-memory cache under high traffic
+- **Non-deterministic caching keys** (e.g., query params ordering issues)
+- **Multi-instance inconsistency** if not using Redis in Kubernetes/clustered deployments
+
 ## Question 2. How do you use **Redis as a cache store**?
 
 ## Question 3. How do you implement **request-level caching**?
