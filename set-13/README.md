@@ -25,6 +25,129 @@
 
 ## Question 1. How do you implement **nested transactions** in TypeORM?
 
+## Short answer
+
+Nested transactions in TypeORM are typically implemented using **database savepoints**, either via `QueryRunner` manually or through a helper like `typeorm-transactional` that emulates nested transactions using savepoints when the database supports them (e.g., PostgreSQL, MySQL InnoDB).
+
+---
+
+## Explanation
+
+### 1. What “nested transactions” actually mean
+
+Most relational databases **do not truly support nested transactions**. Instead, they support:
+
+- A single top-level transaction
+- **Savepoints** inside that transaction
+
+So “nested transactions” = **logical nesting using savepoints**.
+
+---
+
+### 2. TypeORM native behavior
+
+TypeORM does **not provide true nested transaction APIs out of the box**.
+
+If you call `manager.transaction()` inside another transaction:
+
+- It either:
+  - Reuses the existing `QueryRunner` (manual control), or
+  - Starts a separate transaction (dangerous if not scoped properly)
+
+So correct implementation requires:
+
+- A shared `QueryRunner`
+- Manual savepoints OR a transactional wrapper library
+
+---
+
+### 3. Recommended approaches
+
+#### A. Manual QueryRunner + Savepoints (most explicit, interview gold standard)
+
+You manually:
+
+- Start transaction
+- Create savepoints
+- Rollback to savepoint on failure
+
+#### B. Using `typeorm-transactional` (enterprise-friendly)
+
+- Provides `@Transactional()` decorator
+- Handles savepoints automatically
+- Cleaner service-layer code
+
+---
+
+### 4. When to use nested transactions
+
+- Partial rollback inside complex workflows
+- Multi-step domain operations (order + payment + inventory)
+- Saga-like coordination (though event-driven is often better)
+- Preventing full transaction rollback for recoverable sub-operations
+
+---
+
+### Example
+
+### Manual Savepoint-based Nested Transaction (TypeORM QueryRunner)
+
+```ts
+import { DataSource, QueryRunner } from "typeorm";
+import { Injectable } from "@nestjs/common";
+
+@Injectable()
+export class OrderService {
+  constructor(private readonly dataSource: DataSource) {}
+
+  async createOrderFlow() {
+    const queryRunner: QueryRunner = this.dataSource.createQueryRunner();
+
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
+    try {
+      await queryRunner.manager.save("Order", { id: 1 });
+
+      // Create savepoint manually
+      await queryRunner.query("SAVEPOINT sp_payment");
+
+      try {
+        await queryRunner.manager.save("Payment", { orderId: 1 });
+
+        // simulate failure
+        throw new Error("Payment gateway failed");
+      } catch (err) {
+        // rollback only payment part
+        await queryRunner.query("ROLLBACK TO SAVEPOINT sp_payment");
+      }
+
+      await queryRunner.manager.save("AuditLog", {
+        message: "Order processed",
+      });
+
+      await queryRunner.commitTransaction();
+    } catch (err) {
+      await queryRunner.rollbackTransaction();
+    } finally {
+      await queryRunner.release();
+    }
+  }
+}
+```
+
+---
+
+## Pitfalls
+
+- Savepoints are **database-dependent** (not all DBs fully support them)
+- Misusing nested `transaction()` calls can lead to **unexpected multiple connections**
+- QueryRunner leakage causes **connection pool exhaustion**
+- Overusing nested transactions often indicates a **missing domain boundary or saga pattern**
+- Error handling must distinguish:
+  - partial rollback (savepoint)
+  - full rollback (outer transaction)
+
 ## Question 2. How do you implement **transactional decorators**?
 
 ## Question 3. How do you implement **soft deletes with query builders**?
