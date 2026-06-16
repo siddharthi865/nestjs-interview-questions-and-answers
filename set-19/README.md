@@ -25,6 +25,183 @@
 
 ## Question 1. How do you deploy NestJS on **Docker**?
 
+## Short answer
+
+NestJS is deployed on Docker by containerizing the compiled Node.js application using a multi-stage Docker build (build → production runtime image), exposing the app port (usually 3000), and running it via `node dist/main.js` in a lightweight base image like `node:alpine`.
+
+---
+
+## Explanation
+
+Deploying a NestJS application in Docker is a standard enterprise approach for portability, scalability, and environment consistency.
+
+### 1. Architecture overview
+
+A production-grade Docker setup typically uses:
+
+- **Multi-stage build**
+  - Stage 1: Install dependencies + compile TypeScript (`nest build`)
+  - Stage 2: Copy only `dist/` + production `node_modules`
+
+- **Slim runtime image**
+  - Reduces attack surface and image size
+
+- **Environment injection**
+  - Config via `ConfigModule` + `.env` or Kubernetes secrets
+
+- **Health checks (optional)**
+  - Used in orchestration systems (Kubernetes / ECS)
+
+---
+
+### 2. Trade-offs
+
+- ✔ Pros:
+  - Reproducible builds across environments
+  - Easy horizontal scaling
+  - Works well with Kubernetes / ECS / Swarm
+
+- ❌ Cons:
+  - Build-time overhead (TypeScript compilation)
+  - Image layering complexity
+  - Requires proper caching strategy for CI/CD efficiency
+
+---
+
+### 3. Scaling considerations
+
+- Stateless NestJS app → horizontally scalable containers
+- Use:
+  - Redis for caching/session state
+  - External DB connections with pooling
+  - Load balancer (NGINX / ALB / Kubernetes service)
+
+---
+
+### 4. Security implications
+
+- Run as **non-root user**
+- Use `.dockerignore` to avoid leaking secrets
+- Keep dependencies minimal (`npm ci --only=production`)
+- Use pinned Node versions (avoid `latest`)
+
+---
+
+### 5. Deployment flow
+
+1. Build Docker image
+2. Push to registry (Docker Hub / ECR / GCR)
+3. Deploy via:
+   - Docker Compose (simple environments)
+   - Kubernetes (production-scale)
+   - ECS / Cloud Run (managed)
+
+---
+
+## Example
+
+### `Dockerfile` (production-ready multi-stage)
+
+```dockerfile
+# ---- Build stage ----
+FROM node:20-alpine AS builder
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci
+
+COPY . .
+
+RUN npm run build
+
+
+# ---- Production stage ----
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package*.json ./
+RUN npm ci --only=production
+
+COPY --from=builder /app/dist ./dist
+
+# Optional: copy env template
+COPY .env.example ./.env
+
+EXPOSE 3000
+
+CMD ["node", "dist/main.js"]
+```
+
+---
+
+### `docker-compose.yml` (with DB example)
+
+```yaml
+version: "3.9"
+
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=production
+      - DATABASE_URL=postgres://user:pass@db:5432/app
+    depends_on:
+      - db
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: user
+      POSTGRES_PASSWORD: pass
+      POSTGRES_DB: app
+    ports:
+      - "5432:5432"
+```
+
+---
+
+### Minimal NestJS app (for context)
+
+```ts
+import { Controller, Get, Module } from "@nestjs/common";
+import { NestFactory } from "@nestjs/core";
+
+@Controller()
+class AppController {
+  @Get()
+  getHello(): string {
+    return "NestJS running in Docker";
+  }
+}
+
+@Module({
+  controllers: [AppController],
+})
+class AppModule {}
+
+async function bootstrap() {
+  const app = await NestFactory.create(AppModule);
+  await app.listen(3000);
+}
+
+bootstrap();
+```
+
+---
+
+## Pitfalls
+
+- Not using multi-stage builds → large, insecure images
+- Copying `node_modules` from host → platform incompatibility (Linux vs Mac/Windows)
+- Forgetting `npm ci` → inconsistent builds in CI/CD
+- Running as root inside container → security risk
+- Missing `dist/` build step → runtime failures
+- Hardcoding environment variables instead of using config system
+
 ## Question 2. How do you deploy NestJS on **Kubernetes**?
 
 ## Question 3. How do you configure **environment variables** for production?
